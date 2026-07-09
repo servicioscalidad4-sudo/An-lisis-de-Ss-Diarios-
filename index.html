@@ -100,6 +100,9 @@ table.ctrl th.col-novedad-det{color:#d97706;}
 .btn-edit.on{background:#2e7dd1;color:#fff;}
 .edit-hint{font-size:10px;color:#2e7dd1;margin-top:4px;display:none;font-weight:600;}
 .edit-hint.show{display:block;}
+.t-manual{background:#dcfce7;color:#166534;}
+.manual-del{display:inline-block;margin-left:4px;color:#b91c1c;font-weight:700;cursor:pointer;font-size:10px;padding:0 3px;border-radius:3px;}
+.manual-del:hover{background:#fee2e2;}
 </style>
 
 <div class="app">
@@ -178,10 +181,11 @@ table.ctrl th.col-novedad-det{color:#d97706;}
     <div class="action-row">
       <button class="btn-copy" onclick="copyTbl()"><i class="ti ti-copy" style="font-size:13px;" aria-hidden="true"></i> Copiar tabla</button>
       <button class="btn-edit" id="btnEdit" onclick="toggleEdit()"><i class="ti ti-pencil" style="font-size:13px;" aria-hidden="true"></i> Activar edición</button>
+      <button class="btn-edit" id="btnAddSvc" style="display:none;" onclick="openAddSvc()"><i class="ti ti-plus" style="font-size:13px;" aria-hidden="true"></i> Agregar servicio</button>
       <button class="btn-export" id="btnPdf" onclick="exportPDF()"><i class="ti ti-file-type-pdf" style="font-size:13px;" aria-hidden="true"></i> Exportar PDF</button>
       <button class="btn-export" id="btnPng" onclick="exportPNG()"><i class="ti ti-photo" style="font-size:13px;" aria-hidden="true"></i> Exportar imagen</button>
     </div>
-    <div class="edit-hint" id="editHint">Modo edición activo: haz clic dentro de las celdas CULMINAN / EN CURSO para escribir o corregir texto antes de copiar/exportar.</div>
+    <div class="edit-hint" id="editHint">Modo edición activo: haz clic dentro de las celdas CULMINAN / EN CURSO para escribir o corregir texto, o usa "Agregar servicio" para sumar un nuevo registro con su conteo automático.</div>
   </div>
 </div>
 
@@ -200,12 +204,67 @@ table.ctrl th.col-novedad-det{color:#d97706;}
   </div>
 </div>
 
+<!-- Modal para agregar un servicio manualmente (suma automática de conteos) -->
+<div class="detail-overlay" id="addSvcOverlay" onclick="closeAddSvc(event)">
+  <div class="detail-panel" style="max-width:420px;">
+    <div class="detail-header">
+      <div><h2>Agregar servicio</h2><span>Se sumará al conteo automáticamente</span></div>
+      <button class="detail-close" onclick="closeAddSvcBtn()">&#x2715;</button>
+    </div>
+    <div class="detail-body">
+      <div class="filter-group" style="margin-bottom:10px;">
+        <label>Regional</label>
+        <select id="addReg"></select>
+      </div>
+      <div class="filter-group" style="margin-bottom:10px;">
+        <label>Columna</label>
+        <select id="addCol">
+          <option value="culmina">CULMINA</option>
+          <option value="curso">EN CURSO</option>
+        </select>
+      </div>
+      <div class="filter-group" style="margin-bottom:10px;">
+        <label>Tipo de servicio</label>
+        <select id="addTipo">
+          <option value="CT">CT - Cobertura total</option>
+          <option value="CTE">CTE - Con excedente</option>
+          <option value="CONV">CONV - Convenio</option>
+          <option value="MASC">MASC - Mascota</option>
+          <option value="LIC">LIC - Licitación</option>
+          <option value="PART">PART - Particular</option>
+          <option value="COND">COND - Condicional</option>
+          <option value="SNP">SNP - Servicios no prestados</option>
+        </select>
+      </div>
+      <div class="filter-group" style="margin-bottom:10px;">
+        <label>Número de prestación (opcional)</label>
+        <input type="text" id="addNum" placeholder="Ej: 123456">
+      </div>
+      <div class="filter-group" style="margin-bottom:10px;">
+        <label>Nombre (opcional)</label>
+        <input type="text" id="addNombre" placeholder="Nombre del fallecido/mascota">
+      </div>
+      <div class="filter-group">
+        <label>Sala/Sede/Detalle (opcional)</label>
+        <input type="text" id="addDetalle" placeholder="Ej: Sala 1, hora, destino...">
+      </div>
+    </div>
+    <div class="detail-footer" style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn-copy" onclick="closeAddSvcBtn()">Cancelar</button>
+      <button class="btn-export" onclick="confirmAddSvc()">Agregar</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 const dz=document.getElementById('dz'),fi=document.getElementById('fi'),btn=document.getElementById('btn'),st=document.getElementById('st'),pw=document.getElementById('pw'),pb=document.getElementById('pb');
 let allRows=[];
+const ORDER_REGIONALES=['RISARALDA','QUINDIO','CALDAS','ANTIOQUIA','VALLE CENTRO','VALLE NORTE','VALLE SUR','VALLE CENTRO-PALMIRA','CUNDINAMARCA','TOLIMA NORTE','TOLIMA SUR','ATLANTICO','HUILA','CAUCA','SANTANDER','BOGOTA','PUTUMAYO','META','OPERACION NACIONAL'];
+// Estado global de la última tabla generada (para poder re-renderizar tras agregar un servicio manual)
+let __map={}, __regs=[], __refReporte=null, __refSalida=null, __regFiltroG='', __vistaG='ambos';
 
 const today=new Date();
 const todayStr=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
@@ -360,13 +419,12 @@ function readXLSX(file){
 
 // Llena el select de regionales con los valores únicos del archivo
 function populateRegionalFilter(){
-  const ORDER=['RISARALDA','QUINDIO','CALDAS','ANTIOQUIA','VALLE CENTRO','VALLE NORTE','VALLE SUR','VALLE CENTRO-PALMIRA','CUNDINAMARCA','TOLIMA NORTE','TOLIMA SUR','ATLANTICO','HUILA','CAUCA','SANTANDER','BOGOTA','PUTUMAYO','META','OPERACION NACIONAL'];
   const found = new Set();
   allRows.forEach(r=>{
     const reg = String(r['REGIONAL']||'').trim().toUpperCase();
     if(reg && reg !== 'REGIONAL') found.add(reg);
   });
-  const sorted = [...ORDER.filter(r=>found.has(r)), ...[...found].filter(r=>!ORDER.includes(r)).sort()];
+  const sorted = [...ORDER_REGIONALES.filter(r=>found.has(r)), ...[...found].filter(r=>!ORDER_REGIONALES.includes(r)).sort()];
   const sel = document.getElementById('fregional');
   sel.innerHTML = '<option value="">— Todas las regionales —</option>';
   sorted.forEach(reg=>{
@@ -459,7 +517,6 @@ function buildTable(fv,fs){
   const regFiltro = document.getElementById('fregional').value.trim().toUpperCase();
   const vista = document.getElementById('fvista').value; // 'ambos' | 'culminan' | 'curso'
 
-  const ORDER=['RISARALDA','QUINDIO','CALDAS','ANTIOQUIA','VALLE CENTRO','VALLE NORTE','VALLE SUR','VALLE CENTRO-PALMIRA','CUNDINAMARCA','TOLIMA NORTE','TOLIMA SUR','ATLANTICO','HUILA','CAUCA','SANTANDER','BOGOTA','PUTUMAYO','META','OPERACION NACIONAL'];
   const map={};
 
   allRows.forEach(r=>{
@@ -522,12 +579,28 @@ function buildTable(fv,fs){
     }
   });
 
+  // Guardar estado global y delegar el dibujo a renderTable()
+  __map = map;
+  __refReporte = refReporte;
+  __refSalida = refSalida;
+  __regFiltroG = regFiltro;
+  __vistaG = vista;
+  renderTable();
+}
+
+// Dibuja la tabla, las stat cards y los totales a partir del estado global (__map, etc.)
+// Se separó de buildTable() para poder volver a llamarla cuando se agrega un servicio
+// manual (ver agregarServicioManual) sin tener que releer el archivo original.
+function renderTable(){
+  const map = __map, refReporte = __refReporte, refSalida = __refSalida;
+  const regFiltro = __regFiltroG, vista = __vistaG;
+
   // Construir lista de regionales respetando el orden
   let regs;
   if(regFiltro){
     regs = map[regFiltro] ? [regFiltro] : [];
   } else {
-    regs=[...ORDER.filter(r=>map[r]),...Object.keys(map).filter(r=>!ORDER.includes(r))];
+    regs=[...ORDER_REGIONALES.filter(r=>map[r]),...Object.keys(map).filter(r=>!ORDER_REGIONALES.includes(r))];
   }
 
   let tc=0,te=0,tn=0,tmasc=0,tconv=0,tnew=0;
@@ -562,18 +635,18 @@ function buildTable(fv,fs){
     let tdCols = `<td style="font-weight:500;font-size:11px;">${reg}</td>`;
     if(showCulmina) tdCols += `<td class="num col-culmina-num">${rm.c.length}</td>`;
     if(showCurso)   tdCols += `<td class="num col-curso-num">${rm.e.length}</td>`;
-    tdCols += `<td class="num">${regMasc||''}</td><td class="num">${regConv||''}</td>`;
+    tdCols += `<td class="num col-masc-num">${regMasc||''}</td><td class="num col-conv-num">${regConv||''}</td>`;
     if(showCulmina) tdCols += `<td class="det col-culmina-det">${cH}</td>`;
     if(showCurso)   tdCols += `<td class="det col-curso-det">${eH}</td>`;
     if(vista==='novedad') tdCols += `<td class="det">${nH}</td>`;
-    html+=`<tr>${tdCols}</tr>`;
+    html+=`<tr data-reg="${reg}">${tdCols}</tr>`;
   });
 
   // Totales
   let tfCols = `<td>TOTALES</td>`;
   if(showCulmina) tfCols += `<td class="num col-culmina-num">${tc}</td>`;
   if(showCurso)   tfCols += `<td class="num col-curso-num">${te}</td>`;
-  tfCols += `<td class="num">${tmasc}</td><td class="num">${tconv}</td>`;
+  tfCols += `<td class="num col-masc-num">${tmasc}</td><td class="num col-conv-num">${tconv}</td>`;
   const span = (showCulmina?1:0)+(showCurso?1:0);
   tfCols += `<td colspan="${Math.max(span,1)}" style="text-align:center;font-size:10px;">Ingresan hoy: ${tnew} &nbsp;·&nbsp; Culminan: ${tc} &nbsp;·&nbsp; En Curso: ${te} &nbsp;·&nbsp; Novedades: ${tn}</td>`;
 
@@ -582,17 +655,18 @@ function buildTable(fv,fs){
   document.getElementById('ctbl').innerHTML=html;
 
   // Guardar datos para modal de detalle
+  __regs = regs;
   window.__statData = { map, regs, refReporte, refSalida };
 
   // Stats cards: mostrar solo las relevantes
   let statsHtml = '';
-  if(showCulmina) statsHtml += `<div class="stat" onclick="openDetail('culmina')" title="Ver detalle de Culmina"><div class="lbl">Culmina</div><div class="val">${tc}</div><div class="click-hint">Ver detalle ↗</div></div>`;
-  if(showCurso)   statsHtml += `<div class="stat" onclick="openDetail('curso')" title="Ver detalle de En Curso"><div class="lbl">Curso</div><div class="val">${te}</div><div class="click-hint">Ver detalle ↗</div></div>`;
+  if(showCulmina) statsHtml += `<div class="stat" onclick="openDetail('culmina')" title="Ver detalle de Culmina"><div class="lbl">Culmina</div><div class="val" id="statCulmina">${tc}</div><div class="click-hint">Ver detalle ↗</div></div>`;
+  if(showCurso)   statsHtml += `<div class="stat" onclick="openDetail('curso')" title="Ver detalle de En Curso"><div class="lbl">Curso</div><div class="val" id="statCurso">${te}</div><div class="click-hint">Ver detalle ↗</div></div>`;
   
   statsHtml += `
-    <div class="stat" onclick="openDetail('mascota')" title="Ver servicios de Mascota"><div class="lbl">Mascota</div><div class="val">${tmasc}</div><div class="click-hint">Ver detalle ↗</div></div>
-    <div class="stat" onclick="openDetail('convenio')" title="Ver servicios de Convenio"><div class="lbl">Convenio</div><div class="val">${tconv}</div><div class="click-hint">Ver detalle ↗</div></div>
-    <div class="stat" onclick="openDetail('total')" title="Ver todos los servicios activos"><div class="lbl">Total</div><div class="val">${tc+te}</div><div class="click-hint">Ver detalle ↗</div></div>`;
+    <div class="stat" onclick="openDetail('mascota')" title="Ver servicios de Mascota"><div class="lbl">Mascota</div><div class="val" id="statMasc">${tmasc}</div><div class="click-hint">Ver detalle ↗</div></div>
+    <div class="stat" onclick="openDetail('convenio')" title="Ver servicios de Convenio"><div class="lbl">Convenio</div><div class="val" id="statConv">${tconv}</div><div class="click-hint">Ver detalle ↗</div></div>
+    <div class="stat" onclick="openDetail('total')" title="Ver todos los servicios activos"><div class="lbl">Total</div><div class="val" id="statTotal">${tc+te}</div><div class="click-hint">Ver detalle ↗</div></div>`;
   document.getElementById('sgrid').innerHTML=statsHtml;
   // Ajustar grid según cantidad de stats
   const nStats = (showCulmina?1:0)+(showCurso?1:0)+3;
@@ -635,6 +709,7 @@ function toggleEdit(){
   const wrap = document.querySelector('.tbl-wrap');
   const btn = document.getElementById('btnEdit');
   const hint = document.getElementById('editHint');
+  const btnAdd = document.getElementById('btnAddSvc');
   const cells = document.querySelectorAll('#ctbl td.col-culmina-det, #ctbl td.col-curso-det');
   cells.forEach(td=>{ td.setAttribute('contenteditable', __editMode ? 'true' : 'false'); });
   if(__editMode){
@@ -642,13 +717,126 @@ function toggleEdit(){
     btn.classList.add('on');
     btn.innerHTML='<i class="ti ti-lock" style="font-size:13px;"></i> Bloquear edición';
     hint.classList.add('show');
+    if(btnAdd) btnAdd.style.display='inline-flex';
   } else {
     wrap.classList.remove('editable-mode');
     btn.classList.remove('on');
     btn.innerHTML='<i class="ti ti-pencil" style="font-size:13px;"></i> Activar edición';
     hint.classList.remove('show');
+    if(btnAdd) btnAdd.style.display='none';
   }
 }
+
+// ── Agregar servicio manualmente (suma automática de conteos) ──────────────
+function openAddSvc(){
+  const sel = document.getElementById('addReg');
+  sel.innerHTML = '';
+  document.querySelectorAll('#ctbl tbody tr[data-reg]').forEach(tr=>{
+    const reg = tr.getAttribute('data-reg');
+    const o = document.createElement('option');
+    o.value = reg; o.textContent = reg;
+    sel.appendChild(o);
+  });
+  if(!sel.options.length){ alert('Primero genera la tabla de control.'); return; }
+  document.getElementById('addNum').value = '';
+  document.getElementById('addNombre').value = '';
+  document.getElementById('addDetalle').value = '';
+  document.getElementById('addSvcOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeAddSvc(e){
+  if(e.target === document.getElementById('addSvcOverlay')) closeAddSvcBtn();
+}
+function closeAddSvcBtn(){
+  document.getElementById('addSvcOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+function confirmAddSvc(){
+  const reg = document.getElementById('addReg').value;
+  const col = document.getElementById('addCol').value; // 'culmina' | 'curso'
+  const tipo = document.getElementById('addTipo').value;
+  const numv = document.getElementById('addNum').value.trim();
+  const nombre = document.getElementById('addNombre').value.trim();
+  const detalle = document.getElementById('addDetalle').value.trim();
+  if(!reg){ alert('Selecciona una regional.'); return; }
+
+  const tr = document.querySelector(`#ctbl tbody tr[data-reg="${CSS.escape(reg)}"]`);
+  if(!tr){ alert('No se encontró la fila de esa regional.'); return; }
+  const det = tr.querySelector(col === 'culmina' ? 'td.col-culmina-det' : 'td.col-curso-det');
+  if(!det){ alert('Esa columna no está visible en la vista actual. Cambia el filtro "Vista" a "Culminan + En Curso + Novedades" e inténtalo de nuevo.'); return; }
+
+  const naEl = det.querySelector('.na');
+  if(naEl) naEl.remove();
+
+  const idx = det.querySelectorAll(':scope > .sv').length + 1;
+  const nombreHtml = nombre ? `<span class="sv-nombre">${nombre}</span> ` : '';
+  const svHtml = `<span class="sv"><span class="sv-n">${idx}-</span><span class="tag t-new">NUEVO</span><span class="tag t-manual" title="Servicio agregado manualmente">+ MANUAL</span>${tagHtml(tipo)} ${numv}${nombreHtml?' '+nombreHtml:''}${detalle?' - '+detalle:''}<span class="manual-del" onclick="eliminarServicioManual(this)" title="Quitar este servicio agregado" contenteditable="false">✕</span></span>`;
+  det.insertAdjacentHTML('beforeend', svHtml);
+  det.setAttribute('contenteditable', __editMode ? 'true' : 'false');
+
+  closeAddSvcBtn();
+  recalcCounts();
+}
+
+// Quita un servicio agregado manualmente (botón ✕) y recalcula los conteos
+function eliminarServicioManual(btnEl){
+  const sv = btnEl.closest('.sv');
+  if(sv) sv.remove();
+  recalcCounts();
+}
+
+// Recalcula CULMINA/CURSO, MASC/CONV y totales contando lo que realmente hay en las celdas
+function recalcCounts(){
+  let totC=0, totE=0, totMasc=0, totConv=0;
+  document.querySelectorAll('#ctbl tbody tr[data-reg]').forEach(tr=>{
+    const cDet = tr.querySelector('td.col-culmina-det');
+    const eDet = tr.querySelector('td.col-curso-det');
+    const cCount = cDet ? cDet.querySelectorAll(':scope > .sv').length : 0;
+    const eCount = eDet ? eDet.querySelectorAll(':scope > .sv').length : 0;
+    const mascCount = (cDet?cDet.querySelectorAll('.tag.t-ms').length:0) + (eDet?eDet.querySelectorAll('.tag.t-ms').length:0);
+    const convCount = (cDet?cDet.querySelectorAll('.tag.t-cv').length:0) + (eDet?eDet.querySelectorAll('.tag.t-cv').length:0);
+    const cNumTd = tr.querySelector('td.col-culmina-num');
+    const eNumTd = tr.querySelector('td.col-curso-num');
+    const mascTd = tr.querySelector('td.col-masc-num');
+    const convTd = tr.querySelector('td.col-conv-num');
+    if(cDet && cNumTd) cNumTd.textContent = cCount;
+    if(eDet && eNumTd) eNumTd.textContent = eCount;
+    if(mascTd) mascTd.textContent = mascCount || '';
+    if(convTd) convTd.textContent = convCount || '';
+    totC += cCount; totE += eCount; totMasc += mascCount; totConv += convCount;
+  });
+
+  const tf = document.querySelector('#ctbl tfoot tr.tot');
+  if(tf){
+    const tfC = tf.querySelector('td.col-culmina-num');
+    const tfE = tf.querySelector('td.col-curso-num');
+    const tfMasc = tf.querySelector('td.col-masc-num');
+    const tfConv = tf.querySelector('td.col-conv-num');
+    if(tfC) tfC.textContent = totC;
+    if(tfE) tfE.textContent = totE;
+    if(tfMasc) tfMasc.textContent = totMasc;
+    if(tfConv) tfConv.textContent = totConv;
+  }
+
+  const elC = document.getElementById('statCulmina');
+  const elE = document.getElementById('statCurso');
+  const elMasc = document.getElementById('statMasc');
+  const elConv = document.getElementById('statConv');
+  const elTotal = document.getElementById('statTotal');
+  if(elC) elC.textContent = totC;
+  if(elE) elE.textContent = totE;
+  if(elMasc) elMasc.textContent = totMasc;
+  if(elConv) elConv.textContent = totConv;
+  if(elTotal) elTotal.textContent = totC + totE;
+}
+
+// Si el usuario escribe/borra directamente en las celdas editables, también se recalcula
+document.addEventListener('input', e=>{
+  if(__editMode && e.target && e.target.matches && e.target.matches('td.col-culmina-det, td.col-curso-det')){
+    clearTimeout(window.__recalcT);
+    window.__recalcT = setTimeout(recalcCounts, 400);
+  }
+});
 
 async function exportPNG(){
   const btnPng = document.getElementById('btnPng');
