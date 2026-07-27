@@ -506,30 +506,42 @@ function clean(s){
   return s.trim().replace(/^[-\/]+|[-\/]+$/g,'').trim();
 }
 
-// Colombia (Bogotá) no tiene horario de verano y su desfase respecto a UTC
-// es siempre -5 horas. Google Sheets/Apps Script serializa las celdas de
-// tipo HORA como una fecha ISO en UTC anclada al "día cero" de Sheets
-// (ej: "1899-12-30T18:56:16.000Z"), así que hay que restar 5 horas al valor
-// UTC para recuperar la hora local que realmente se digitó.
-const COLOMBIA_UTC_OFFSET_HOURS = 5;
+// Google Sheets/Apps Script serializa las celdas de tipo HORA como una fecha
+// ISO en UTC anclada al "día cero" de Sheets: 1899-12-30. El problema es que
+// esa fecha es ANTERIOR a 1914, año en que Colombia adoptó oficialmente el
+// huso horario UTC-5:00:00. Antes de esa fecha, la base de datos de husos
+// horarios (la misma que usan V8/Apps Script) le asigna a Bogotá el desfase
+// HISTÓRICO real: UTC-4:56:16 (4 horas, 56 minutos y 16 segundos), no -5:00:00
+// exactas. Por eso, si uno resta 5 horas "redondas", el resultado queda
+// sistemáticamente ~4 minutos adelantado (ej: 3:00 p.m. termina mostrando
+// 2:56 p.m.). La corrección correcta es restar el desfase histórico exacto
+// (4h 56m 16s) trabajando en segundos totales, no solo en la hora.
+const BOGOTA_HISTORIC_OFFSET_SECONDS = 4*3600 + 56*60 + 16; // 17776s = -4:56:16
 
 // Google Sheets/Apps Script suele devolver las celdas de hora como fecha ISO
 // completa anclada al "día cero" de Sheets (ej: "1899-12-30T20:26:16.000Z")
 // en vez de un texto simple "20:26". Esta función detecta ese caso y extrae
 // la hora directamente de los dígitos del ISO, corrigiendo el desfase UTC -> 
-// hora local de Colombia, y si no es ISO, limpia normal.
+// hora local de Colombia con el offset histórico exacto, y si no es ISO,
+// limpia normal.
 function parseHora(v){
   const s = String(v||'').trim();
   if(!s) return '';
 
   // Google Sheets/Apps Script: celdas de hora devueltas como fecha ISO
-  // anclada al "día cero" (ej: "1899-12-30T15:30:00.000Z"), en UTC.
-  const iso = s.match(/^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2})/);
+  // anclada al "día cero" (ej: "1899-12-30T19:56:16.000Z"), en UTC.
+  const iso = s.match(/^\d{4}-\d{2}-\d{2}T(\d{2}):(\d{2}):(\d{2})/);
   if(iso){
     const hUtc = parseInt(iso[1],10);
-    // Convertimos de UTC a hora local de Colombia (UTC-5) antes de formatear.
-    const hLocal = ((hUtc - COLOMBIA_UTC_OFFSET_HOURS) % 24 + 24) % 24;
-    return format12h(hLocal, iso[2]);
+    const mUtc = parseInt(iso[2],10);
+    const sUtc = parseInt(iso[3],10);
+    const totalSecUtc = hUtc*3600 + mUtc*60 + sUtc;
+    // Restamos el desfase histórico EXACTO (4h56m16s), no 5h redondas,
+    // para recuperar la hora local real que se digitó.
+    const totalSecLocal = ((totalSecUtc - BOGOTA_HISTORIC_OFFSET_SECONDS) % 86400 + 86400) % 86400;
+    const hLocal = Math.floor(totalSecLocal/3600);
+    const mLocal = Math.floor((totalSecLocal%3600)/60);
+    return format12h(hLocal, String(mLocal).padStart(2,'0'));
   }
 
   const c = clean(s);
